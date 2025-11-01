@@ -3,13 +3,20 @@ FROM public.ecr.aws/docker/library/python:3.11-slim
 WORKDIR /app
 
 COPY ./requirements.txt .
-COPY main.py .
 
 RUN pip install --upgrade pip
 RUN pip install -r requirements.txt
+RUN pip install aws-opentelemetry-distro==0.10.1
+
+ENV AWS_REGION=us-west-2
+ENV AWS_DEFAULT_REGION=us-west-2
+
+RUN useradd -m -u 1000 bedrock_agentcore
+USER bedrock_agentcore
+
+EXPOSE 8080
+EXPOSE 8000
 
 COPY . .
 
-EXPOSE 8080
-
-CMD ["python", "main.py"]
+CMD ["opentelemetry-instrument", "python", "-m", "main"]

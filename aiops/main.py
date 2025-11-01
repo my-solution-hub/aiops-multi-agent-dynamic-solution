@@ -7,7 +7,7 @@ app = BedrockAgentCoreApp()
 
 agent = Agent(
     name="AIOps Root Cause Analyzer",
-    instructions="""You are an AWS CloudWatch alarm analyzer. 
+    system_prompt="""You are an AWS CloudWatch alarm analyzer. 
     Analyze alarm data and provide root cause analysis with recommendations.
     Use available MCP tools to investigate AWS resources."""
 )
@@ -22,7 +22,7 @@ def invoke(payload):
     
     return {
         "investigation_id": payload.get("investigation_id", "demo-001"),
-        "analysis": result.message,
+        "response": result.message,
         "status": "completed"
     }
 
