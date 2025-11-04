@@ -6,6 +6,7 @@ import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as bedrockagentcore from 'aws-cdk-lib/aws-bedrockagentcore';
 import * as ecr from 'aws-cdk-lib/aws-ecr';
 import * as codebuild from 'aws-cdk-lib/aws-codebuild';
+import * as cognito from 'aws-cdk-lib/aws-cognito';
 import { Construct } from 'constructs';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -15,6 +16,7 @@ export class AIOpsStack extends cdk.Stack {
   public readonly agentPromptsTable: dynamodb.Table;
   public readonly feishuNotifier: lambda.Function;
   public readonly agentRole: iam.Role;
+  public readonly userPool: cognito.UserPool;
   public readonly agentCoreGateway: bedrockagentcore.CfnGateway;
   public readonly agentRuntime: bedrockagentcore.CfnRuntime;
 
@@ -25,6 +27,7 @@ export class AIOpsStack extends cdk.Stack {
     this.agentPromptsTable = this.createAgentPromptsTable();
     this.feishuNotifier = this.createFeishuNotifier();
     this.agentRole = this.createAgentRole();
+    this.userPool = this.createUserPool();
     this.agentCoreGateway = this.createAgentCoreGateway();
     this.agentRuntime = this.createAgentRuntime();
     this.createConfigParameters();
@@ -126,6 +129,15 @@ export class AIOpsStack extends cdk.Stack {
               resources: ['*']
             })
           ]
+        }),
+        LambdaInvoke: new iam.PolicyDocument({
+          statements: [
+            new iam.PolicyStatement({
+              effect: iam.Effect.ALLOW,
+              actions: ['lambda:InvokeFunction'],
+              resources: ['*']
+            })
+          ]
         })
       }
     });
@@ -133,13 +145,65 @@ export class AIOpsStack extends cdk.Stack {
     return role;
   }
 
+  private createUserPool(): cognito.UserPool {
+    return new cognito.UserPool(this, 'AIOpsUserPool', {
+      userPoolName: 'aiops-users',
+      selfSignUpEnabled: true,
+      signInAliases: { email: true },
+      autoVerify: { email: true },
+      removalPolicy: cdk.RemovalPolicy.DESTROY
+    });
+  }
+
   private createAgentCoreGateway(): bedrockagentcore.CfnGateway {
-    return new bedrockagentcore.CfnGateway(this, 'AIOpsGateway', {
+    const gateway = new bedrockagentcore.CfnGateway(this, 'AIOpsGateway', {
       name: 'aiops-notification-gateway',
       authorizerType: 'AWS_IAM',
       protocolType: 'MCP',
-      roleArn: this.agentRole.roleArn
+      roleArn: this.agentRole.roleArn,
+      exceptionLevel: 'DEBUG',
+
+      // authorizerConfiguration: {
+      //   customJwtAuthorizer: {
+      //     discoveryUrl: `https://cognito-idp.${this.region}.amazonaws.com/${this.userPool.userPoolId}/.well-known/openid-configuration`,
+      //     allowedAudience: [this.userPool.userPoolId],
+      //     allowedClients: [ "52vte516ehgb1inuvamt0pi9kv" ]
+      //   }
+      // }
     });
+
+    new bedrockagentcore.CfnGatewayTarget(this, 'FeishuTarget', {
+      gatewayIdentifier: gateway.attrGatewayIdentifier,
+      name: 'feishu-notifier',
+      targetConfiguration: {
+        mcp: {
+          lambda: {
+            lambdaArn: this.feishuNotifier.functionArn,
+            toolSchema: {
+              inlinePayload: [{
+                name: 'send_notification',
+                description: 'Send notification to Feishu',
+                inputSchema: {
+                  type: 'object',
+                  properties: {
+                    message: {
+                      type: 'string',
+                      description: 'Notification message'
+                    }
+                  },
+                  required: ['message']
+                }
+              }]
+            }
+          }
+        }
+      },
+      credentialProviderConfigurations: [{
+        credentialProviderType: 'GATEWAY_IAM_ROLE'
+      }]
+    });
+
+    return gateway;
   }
 
   private createAgentRuntime(): bedrockagentcore.CfnRuntime {
@@ -184,6 +248,11 @@ export class AIOpsStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'AgentPromptsTableName', {
       value: this.agentPromptsTable.tableName,
       description: 'DynamoDB table for agent prompts'
+    });
+
+    new cdk.CfnOutput(this, 'UserPoolId', {
+      value: this.userPool.userPoolId,
+      description: 'Cognito User Pool ID for authentication'
     });
 
     new cdk.CfnOutput(this, 'FeishuNotifierArn', {
