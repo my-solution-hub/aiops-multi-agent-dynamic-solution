@@ -4,12 +4,80 @@ A multi-agent system for automated root cause analysis of AWS CloudWatch alarms 
 
 ## Architecture
 
-The system employs three specialized agents working in a feedback loop:
+### Overview
 
-- **Brain Agent**: Processes alarms, generates investigation workflows, and assesses confidence
-- **Domain Analysis AI Agent**: AI Agent with tools and prompts to identify most relevant AWS resources
-- **Executor Agent**: Orchestrates workflow execution across specialized agents *(coming soon)*
-- **Evaluator Agent**: Assesses investigation completeness and quality *(coming soon)*
+The system uses a **task-driven multi-agent architecture** with MCP (Model Context Protocol) gateways for tool integration:
+
+```
+CloudWatch Alarm → Brain Agent → Tasks → Executor Agent → Specialized Agents → MCP Gateways → AWS Services
+                        ↓                                          ↓
+                   Workflows                              Domain-specific Tools
+```
+
+### Core Components
+
+1. **Brain Agent**: Alarm analyzer and workflow generator
+   - Processes CloudWatch alarms
+   - Generates investigation tasks with specific prompts
+   - Assesses confidence and creates analysis reports
+
+2. **Executor Agent**: Task orchestrator using Strands Graph
+   - Receives tasks from Brain Agent
+   - Creates specialized agents per task (with task-specific prompts)
+   - Manages agent execution flow
+   - Aggregates results back to Brain Agent
+
+3. **Specialized Agents**: Domain experts with MCP tools
+   - **LogsAgent**: CloudWatch Logs analysis (→ Observability Gateway)
+   - **MetricsAgent**: CloudWatch Metrics analysis (→ Observability Gateway)
+   - **TracesAgent**: X-Ray traces analysis (→ Observability Gateway)
+   - **ResourceAgent**: AWS resource inspection (→ AWS Resources Gateway)
+   - **NotificationAgent**: Alert delivery (→ Notification Gateway)
+
+4. **MCP Gateways**: Tool providers (AgentCore Gateways)
+   - Expose domain-specific tools via MCP protocol
+   - Authenticated via AWS SigV4 (IAM)
+   - Pre-configured per agent (static mapping)
+
+### Gateway Organization
+
+**Observability Gateway** (`observability-gateway`)
+- CloudWatch Logs query tools
+- CloudWatch Metrics query tools
+- X-Ray traces query tools
+
+**AWS Resources Gateway** (`resources-gateway`)
+- EC2 describe/inspect tools
+- RDS describe/inspect tools
+- ELB describe/inspect tools
+- Resource tagging tools
+
+**Notification Gateway** (`notification-gateway`)
+- Feishu notification tool
+- Email notification (future)
+- Slack notification (future)
+
+### Agent-Gateway Mapping
+
+```python
+AGENT_GATEWAY_CONFIG = {
+    "LogsAgent": ["observability-gateway"],
+    "MetricsAgent": ["observability-gateway"],
+    "TracesAgent": ["observability-gateway"],
+    "ResourceAgent": ["resources-gateway"],
+    "NotificationAgent": ["notification-gateway"],
+    # Agents can use multiple gateways if needed
+    "HybridAgent": ["observability-gateway", "resources-gateway"]
+}
+```
+
+### Design Principles
+
+- **Pre-configured Tool Access**: Static agent-to-gateway mapping for simplicity
+- **IAM Authentication**: All gateways use AWS SigV4 for authentication
+- **One Agent Per Task**: Executor creates fresh agent instances with task-specific prompts
+- **Graph Orchestration**: Strands Graph manages agent execution flow
+- **1:N Gateway Mapping**: Each agent can access multiple gateways (typically 1)
 
 ## Current Status
 
@@ -38,19 +106,38 @@ aiops/
 ├── agents/          # Agent implementations
 │   ├── base.py      # Base agent class and communication
 │   ├── brain_agent.py  # Brain Agent implementation
-│   ├── domain_analysis_agent.py  # Domain Analysis Agent
+│   ├── executor_agent.py  # Executor Agent with Strands Graph
+│   ├── logs_agent.py      # CloudWatch Logs specialist
+│   ├── metrics_agent.py   # CloudWatch Metrics specialist
+│   ├── traces_agent.py    # X-Ray traces specialist
+│   ├── resource_agent.py  # AWS resources specialist
+│   ├── notification_agent.py  # Notification specialist
 │   └── interfaces.py   # Agent interface definitions
 ├── models/          # Data models and enums
 │   ├── data_models.py  # Core data structures
 │   └── enums.py        # System enumerations
+├── tools/           # Tool integration layer
+│   ├── mcp_client.py      # MCP client with SigV4 auth
+│   ├── gateway_config.py  # Agent-to-gateway mapping
+│   └── tool_loader.py     # Tool discovery and loading
 └── utils/           # Utility modules
     ├── logging.py   # Logging configuration
     └── validation.py # Validation utilities
 
 tests/               # Test suite
+├── gateway/         # Gateway integration tests
+│   ├── test_notification_gateway_function.py
+│   └── streamable_http_sigv4.py
 ├── test_brain_agent.py    # Automated Brain Agent tests
 ├── brain_agent_cli.py     # Interactive CLI for testing
 └── README.md             # Test documentation
+
+cdk/                 # Infrastructure as Code
+├── lib/
+│   ├── aiops-stack.ts     # Main stack with gateways
+│   └── ecr-stack.ts       # ECR repository
+└── lambda/          # Lambda functions for gateways
+    └── feishu_notifier.py
 
 .kiro/specs/aiops-root-cause-analysis/  # Specification documents
 ├── requirements.md  # System requirements
@@ -117,6 +204,19 @@ The current test suite covers:
 
 - Python 3.8+
 - Dependencies defined in the project modules
+
+### Environment Variables
+
+The following environment variables must be set (exported from CDK outputs):
+
+```bash
+export OBSERVABILITY_GATEWAY_URL="https://xxx.gateway.bedrock-agentcore.REGION.amazonaws.com/mcp"
+export RESOURCES_GATEWAY_URL="https://xxx.gateway.bedrock-agentcore.REGION.amazonaws.com/mcp"
+export NOTIFICATION_GATEWAY_URL="https://xxx.gateway.bedrock-agentcore.REGION.amazonaws.com/mcp"
+export AWS_REGION="ap-southeast-1"
+```
+
+These URLs are output by the CDK stack deployment.
 
 ### Deployment to AgentCore Runtime
 

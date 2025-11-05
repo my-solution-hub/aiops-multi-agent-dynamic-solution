@@ -1,8 +1,10 @@
 import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
+import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as bedrockagentcore from 'aws-cdk-lib/aws-bedrockagentcore';
 import * as ecr from 'aws-cdk-lib/aws-ecr';
 import * as codebuild from 'aws-cdk-lib/aws-codebuild';
@@ -14,6 +16,8 @@ import * as path from 'path';
 export class AIOpsStack extends cdk.Stack {
   public readonly investigationsTable: dynamodb.Table;
   public readonly agentPromptsTable: dynamodb.Table;
+  public readonly investigationQueue: sqs.Queue;
+  public readonly sqsTriggerFunction: lambda.Function;
   public readonly feishuNotifier: lambda.Function;
   public readonly agentRole: iam.Role;
   public readonly userPool: cognito.UserPool;
@@ -25,11 +29,13 @@ export class AIOpsStack extends cdk.Stack {
 
     this.investigationsTable = this.createInvestigationsTable();
     this.agentPromptsTable = this.createAgentPromptsTable();
+    this.investigationQueue = this.createInvestigationQueue();
     this.feishuNotifier = this.createFeishuNotifier();
     this.agentRole = this.createAgentRole();
     this.userPool = this.createUserPool();
     this.agentCoreGateway = this.createAgentCoreGateway();
     this.agentRuntime = this.createAgentRuntime();
+    this.sqsTriggerFunction = this.createSqsTriggerFunction();
     this.createConfigParameters();
     this.createOutputs();
   }
@@ -55,11 +61,19 @@ export class AIOpsStack extends cdk.Stack {
 
   private createAgentPromptsTable(): dynamodb.Table {
     return new dynamodb.Table(this, 'AgentPromptsTable', {
-      tableName: 'aiops-agent-prompts',
-      partitionKey: { name: 'agent_name', type: dynamodb.AttributeType.STRING },
-      sortKey: { name: 'version', type: dynamodb.AttributeType.STRING },
+      partitionKey: { name: 'session_id', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'agent_name', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       pointInTimeRecovery: true,
+      removalPolicy: cdk.RemovalPolicy.DESTROY
+    });
+  }
+
+  private createInvestigationQueue(): sqs.Queue {
+    return new sqs.Queue(this, 'InvestigationQueue', {
+      queueName: 'aiops-investigations',
+      visibilityTimeout: cdk.Duration.minutes(15),
+      retentionPeriod: cdk.Duration.days(1),
       removalPolicy: cdk.RemovalPolicy.DESTROY
     });
   }
@@ -135,6 +149,38 @@ export class AIOpsStack extends cdk.Stack {
             new iam.PolicyStatement({
               effect: iam.Effect.ALLOW,
               actions: ['lambda:InvokeFunction'],
+              resources: ['*']
+            })
+          ]
+        }),
+        AgentCoreGatewayAccess: new iam.PolicyDocument({
+          statements: [
+            new iam.PolicyStatement({
+              effect: iam.Effect.ALLOW,
+              actions: ['bedrock-agentcore:InvokeGateway'],
+              resources: ['*']
+            })
+          ]
+        }),
+        SQSAccess: new iam.PolicyDocument({
+          statements: [
+            new iam.PolicyStatement({
+              effect: iam.Effect.ALLOW,
+              actions: [
+                'sqs:SendMessage',
+                'sqs:ReceiveMessage',
+                'sqs:DeleteMessage',
+                'sqs:GetQueueAttributes'
+              ],
+              resources: [this.investigationQueue.queueArn]
+            })
+          ]
+        }),
+        XRayAccess: new iam.PolicyDocument({
+          statements: [
+            new iam.PolicyStatement({
+              effect: iam.Effect.ALLOW,
+              actions: ['xray:PutTraceSegments', 'xray:PutTelemetryRecords'],
               resources: ['*']
             })
           ]
@@ -220,10 +266,41 @@ export class AIOpsStack extends cdk.Stack {
           containerUri: imageUri.valueAsString
         }
       },
+      environmentVariables: {
+        INVESTIGATION_QUEUE_URL: this.investigationQueue.queueUrl,
+        INVESTIGATIONS_TABLE: this.investigationsTable.tableName,
+        NOTIFICATION_GATEWAY_URL: this.agentCoreGateway.attrGatewayUrl,
+        AWS_REGION: this.region,
+        AWS_DEFAULT_REGION: this.region
+      },
       networkConfiguration: {
         networkMode: 'PUBLIC'
       }
     });
+  }
+
+  private createSqsTriggerFunction(): lambda.Function {
+    const fn = new lambda.Function(this, 'SqsTriggerFunction', {
+      runtime: lambda.Runtime.PYTHON_3_11,
+      handler: 'sqs_trigger.lambda_handler',
+      code: lambda.Code.fromAsset('lambda'),
+      timeout: cdk.Duration.seconds(60),
+      environment: {
+        AGENT_RUNTIME_ARN: this.agentRuntime.attrAgentRuntimeArn
+      }
+    });
+
+    fn.addEventSource(new lambdaEventSources.SqsEventSource(this.investigationQueue, {
+      batchSize: 1
+    }));
+
+    fn.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['bedrock-agentcore:InvokeAgentRuntime'],
+      resources: ['*']
+    }));
+
+    return fn;
   }
 
   private createConfigParameters(): void {
@@ -248,6 +325,11 @@ export class AIOpsStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'AgentPromptsTableName', {
       value: this.agentPromptsTable.tableName,
       description: 'DynamoDB table for agent prompts'
+    });
+
+    new cdk.CfnOutput(this, 'InvestigationQueueUrl', {
+      value: this.investigationQueue.queueUrl,
+      description: 'SQS queue URL for investigation triggers'
     });
 
     new cdk.CfnOutput(this, 'UserPoolId', {

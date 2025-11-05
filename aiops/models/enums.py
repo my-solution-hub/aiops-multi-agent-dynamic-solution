@@ -3,6 +3,13 @@
 from enum import Enum
 
 
+class MessageType(str, Enum):
+    """SQS message types for different agent execution flows"""
+    ALARM = "ALARM"           # Consumed by Brain Agent
+    EXECUTION = "EXECUTION"   # Consumed by Executor Agent
+    EVALUATION = "EVALUATION" # Consumed by Evaluator Agent
+
+
 class ExecutionStatus(Enum):
     """Status of workflow step execution"""
     PENDING = "pending"

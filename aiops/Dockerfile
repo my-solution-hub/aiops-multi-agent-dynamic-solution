@@ -8,15 +8,12 @@ RUN pip install --upgrade pip
 RUN pip install -r requirements.txt
 RUN pip install aws-opentelemetry-distro==0.10.1
 
-ENV AWS_REGION=us-west-2
-ENV AWS_DEFAULT_REGION=us-west-2
-
 RUN useradd -m -u 1000 bedrock_agentcore
 USER bedrock_agentcore
 
 EXPOSE 8080
 EXPOSE 8000
 
-COPY . .
+COPY . /app/aiops
 
-CMD ["opentelemetry-instrument", "python", "-m", "main"]
+CMD ["opentelemetry-instrument", "python", "-m", "aiops.main"]

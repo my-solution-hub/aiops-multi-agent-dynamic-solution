@@ -1,30 +1,37 @@
 """AIOps AgentCore Runtime Entry Point"""
+
 from bedrock_agentcore import BedrockAgentCoreApp
-from strands import Agent
-import json
+from .orchestrator.brain_agent import BrainAgent
+from .orchestrator.executor_agent import ExecutorAgent
+from .models.enums import MessageType
 
 app = BedrockAgentCoreApp()
 
-agent = Agent(
-    name="AIOps Root Cause Analyzer",
-    system_prompt="""You are an AWS CloudWatch alarm analyzer. 
-    Analyze alarm data and provide root cause analysis with recommendations.
-    Use available MCP tools to investigate AWS resources."""
-)
-
 @app.entrypoint
 def invoke(payload):
-    """Handle alarm investigation requests"""
-    alarm = payload.get("alarm", {})
-    prompt = payload.get("prompt", f"Analyze this CloudWatch alarm: {json.dumps(alarm)}")
+    """Route messages to Brain or Executor based on message_type."""
+    message_type = payload.get("message_type", MessageType.ALARM.value)
     
-    result = agent(prompt)
-    
-    return {
-        "investigation_id": payload.get("investigation_id", "demo-001"),
-        "response": result.message,
-        "status": "completed"
-    }
+    if message_type == MessageType.EXECUTION.value:
+        investigation_id = payload.get("investigation_id")
+        executor = ExecutorAgent()
+        result = executor.execute_workflow(investigation_id)
+        return {
+            "investigation_id": investigation_id,
+            "status": "execution_ongoing",
+            "result": result
+        }
+    else:
+        alarm_text = payload.get("alarm", payload.get("prompt", ""))
+        brain = BrainAgent()
+        investigation_id = brain.process_alarm_text(alarm_text)
+        return {
+            "investigation_id": investigation_id,
+            "status": "investigation_triggered",
+            "message": "Workflow created and execution queued"
+        }
 
 if __name__ == "__main__":
     app.run()
+
+
