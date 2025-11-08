@@ -21,6 +21,15 @@ def invoke(payload):
             "status": "execution_ongoing",
             "result": result
         }
+    elif message_type == "RE_EVALUATE":
+        investigation_id = payload.get("investigation_id")
+        brain = BrainAgent()
+        result = brain.re_evaluate_workflow(investigation_id)
+        return {
+            "investigation_id": investigation_id,
+            "status": "re_evaluation_complete",
+            "result": result
+        }
     else:
         alarm_text = payload.get("alarm", payload.get("prompt", ""))
         brain = BrainAgent()

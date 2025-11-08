@@ -6,13 +6,34 @@ A multi-agent system for automated root cause analysis of AWS CloudWatch alarms 
 
 ### Overview
 
-The system uses a **task-driven multi-agent architecture** with MCP (Model Context Protocol) gateways for tool integration:
+The system uses a **task-driven multi-agent architecture** with MCP (Model Context Protocol) gateways for tool integration and a feedback loop for adaptive workflow generation:
 
 ```
 CloudWatch Alarm → Brain Agent → Tasks → Executor Agent → Specialized Agents → MCP Gateways → AWS Services
-                        ↓                                          ↓
-                   Workflows                              Domain-specific Tools
+                        ↓                      ↓                                          ↓
+                   Workflows            Update Context                          Domain-specific Tools
+                        ↑                      ↓
+                        ← ← ← ← ← ← ← (SQS: RE_EVALUATE)
 ```
+
+### Message Flow
+
+1. **ALARM → Brain Agent**
+   - Process alarm text and generate investigation workflow
+   - Initialize context in DynamoDB
+   - Send SQS message (EXECUTION)
+
+2. **EXECUTION → Executor Agent**
+   - Execute next task with specialized agent
+   - Update context with findings (prefixed by task_id)
+   - Add timeline event
+   - Send SQS message (RE_EVALUATE)
+
+3. **RE_EVALUATE → Brain Agent**
+   - Read accumulated context and findings
+   - Assess confidence level
+   - Adapt workflow: continue, add tasks, or conclude
+   - Send SQS message (EXECUTION) if needed
 
 ### Core Components
 
@@ -76,8 +97,23 @@ AGENT_GATEWAY_CONFIG = {
 - **Pre-configured Tool Access**: Static agent-to-gateway mapping for simplicity
 - **IAM Authentication**: All gateways use AWS SigV4 for authentication
 - **One Agent Per Task**: Executor creates fresh agent instances with task-specific prompts
-- **Graph Orchestration**: Strands Graph manages agent execution flow
+- **Single Row Context**: One DynamoDB row per investigation with task-prefixed findings
+- **Feedback Loop**: Executor triggers Brain re-evaluation after each task
+- **Adaptive Workflows**: Brain adjusts investigation based on accumulated findings
 - **1:N Gateway Mapping**: Each agent can access multiple gateways (typically 1)
+
+### Data Stores
+
+**Investigation Workflow Table** (`aiops-investigations`)
+- Stores workflow metadata, tasks, and execution plan
+- Partition Key: `investigation_id`, Sort Key: `item_type`
+- Item types: METADATA, TASK#{task_id}, RESULT#{task_id}
+
+**Investigation Context Table** (`aiops-investigation-context`)
+- Single row per investigation tracking progress
+- Partition Key: `investigation_id`
+- Contains: alarm_summary, status, confidence, hypothesis, findings, timeline
+- Findings keyed by `{task_id}_{agent_type}` to prevent duplication
 
 ## Current Status
 
@@ -86,18 +122,27 @@ AGENT_GATEWAY_CONFIG = {
 - Core data models and enums
 - Base agent communication infrastructure
 - Brain Agent with alarm processing and workflow generation
-- Domain Analysis AI Agent with 6 AWS tools and 4 analysis prompts
+- Brain Agent re-evaluation based on findings
+- Executor Agent with task execution
+- Investigation context store (single-row design)
+- Context update after each task
+- Feedback loop (Executor → Brain via SQS)
+- Message routing (ALARM, EXECUTION, RE_EVALUATE)
+- DynamoDB tables (workflow + context)
+- MCP gateway integration
+- Tool loading infrastructure
 
 🚧 **In Progress:**
 
-- Task 2.2: Workflow generation and adaptation
-- Task 2.3: Analysis report generation
+- Testing end-to-end workflow
+- Additional specialized agents (MetricsAgent, TracesAgent, ResourceAgent)
 
 📋 **Planned:**
 
-- Executor Agent implementation
-- Evaluator Agent implementation
-- Multi-agent orchestration with Strands Graph
+- Confidence-based workflow adaptation
+- Analysis report generation
+- Notification integration
+- Monitoring and observability
 
 ## Project Structure
 
@@ -213,6 +258,9 @@ The following environment variables must be set (exported from CDK outputs):
 export OBSERVABILITY_GATEWAY_URL="https://xxx.gateway.bedrock-agentcore.REGION.amazonaws.com/mcp"
 export RESOURCES_GATEWAY_URL="https://xxx.gateway.bedrock-agentcore.REGION.amazonaws.com/mcp"
 export NOTIFICATION_GATEWAY_URL="https://xxx.gateway.bedrock-agentcore.REGION.amazonaws.com/mcp"
+export INVESTIGATION_QUEUE_URL="https://sqs.REGION.amazonaws.com/ACCOUNT/aiops-investigations"
+export INVESTIGATIONS_TABLE="aiops-investigations"
+export CONTEXT_TABLE="aiops-investigation-context"
 export AWS_REGION="ap-southeast-1"
 ```
 

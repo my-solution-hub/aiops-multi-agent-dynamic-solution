@@ -15,10 +15,11 @@ AGENT_GATEWAY_CONFIG: Dict[str, Dict[str, any]] = {
         "gateways": ["notification-gateway"],
         "description": "Sends notifications to on-call team via Feishu"
     },
-    # "LogsAgent": {
-    #     "gateways": ["observability-gateway"],
-    #     "description": "Analyzes CloudWatch Logs for errors, warnings, and patterns"
-    # },
+    "LogsAgent": {
+        "gateways": ["observability-gateway"],
+        "description": "Queries CloudWatch Logs for errors, warnings, and patterns"
+    },
+
     # "MetricsAgent": {
     #     "gateways": ["observability-gateway"],
     #     "description": "Queries CloudWatch Metrics for performance data and trends"
@@ -36,8 +37,7 @@ AGENT_GATEWAY_CONFIG: Dict[str, Dict[str, any]] = {
 # Gateway URLs from environment
 GATEWAY_URLS: Dict[str, str] = {
     "notification-gateway": os.getenv("NOTIFICATION_GATEWAY_URL", ""),
-    # "observability-gateway": os.getenv("OBSERVABILITY_GATEWAY_URL", ""),
-    # "resources-gateway": os.getenv("RESOURCES_GATEWAY_URL", ""),
+    "observability-gateway": os.getenv("OBSERVABILITY_GATEWAY_URL", ""),
 }
 
 def get_gateways_for_agent(agent_name: str) -> List[str]:

@@ -1,11 +1,15 @@
 """Tooling agents for the AIOps Root Cause Analysis system"""
 
-from .metrics_agent import MetricsAgent
-from .logs_agent import LogsAgent
-from .traces_agent import TracesAgent
+from .agent_configs import (
+    get_agent_config,
+    get_system_prompt,
+    process_agent_result,
+    AGENT_CONFIGS
+)
 
 __all__ = [
-    "MetricsAgent",
-    "LogsAgent", 
-    "TracesAgent"
+    "get_agent_config",
+    "get_system_prompt",
+    "process_agent_result",
+    "AGENT_CONFIGS"
 ]

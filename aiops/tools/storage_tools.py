@@ -5,10 +5,12 @@ import json
 import os
 from strands.tools import tool
 from aiops.utils.dynamodb_helper import InvestigationStore
+from aiops.utils.context_store import InvestigationContextStore
 from aiops.models.enums import MessageType
 from typing import Dict, List
 
 store = InvestigationStore()
+context_store = InvestigationContextStore()
 sqs = boto3.client('sqs')
 
 @tool
@@ -54,6 +56,24 @@ def trigger_investigation(investigation_id: str) -> str:
     return f"Investigation {investigation_id} triggered for execution"
 
 @tool
+def get_alarm_summary(investigation_id: str) -> Dict:
+    """Get alarm summary for an investigation from DynamoDB.
+    
+    Args:
+        investigation_id: Investigation ID
+        
+    Returns:
+        Alarm summary dict with alarm_name, metric_name, namespace, resource_id, threshold, etc.
+    """
+    workflow = store.get_workflow(investigation_id)
+    alarm_summary = workflow.get('alarm_summary', {})
+    
+    if not alarm_summary:
+        return {"error": f"No alarm summary found for investigation {investigation_id}"}
+    
+    return alarm_summary
+
+@tool
 def get_next_task(investigation_id: str) -> Dict:
     """Get the next task to execute from investigation workflow.
     
@@ -91,3 +111,58 @@ def complete_task(
     """
     store.complete_task(investigation_id, task_id, result)
     return f"Task {task_id} completed for investigation {investigation_id}"
+
+@tool
+def update_context_finding(
+    investigation_id: str,
+    task_id: str,
+    agent_type: str,
+    finding_data: Dict
+) -> str:
+    """Update investigation context with task findings.
+    
+    Args:
+        investigation_id: Investigation ID
+        task_id: Task ID
+        agent_type: Agent type
+        finding_data: Finding data dict
+        
+    Returns:
+        Success message
+    """
+    context_store.update_finding(investigation_id, task_id, agent_type, finding_data)
+    return f"Context updated for {task_id}_{agent_type}"
+
+@tool
+def add_context_event(
+    investigation_id: str,
+    event: str,
+    source: str
+) -> str:
+    """Add event to investigation timeline.
+    
+    Args:
+        investigation_id: Investigation ID
+        event: Event description
+        source: Event source (agent name)
+        
+    Returns:
+        Success message
+    """
+    context_store.add_timeline_event(investigation_id, event, source)
+    return f"Event added to timeline: {event}"
+
+@tool
+def get_investigation_context(investigation_id: str) -> Dict:
+    """Get full investigation context.
+    
+    Args:
+        investigation_id: Investigation ID
+        
+    Returns:
+        Full context dict
+    """
+    context = context_store.get_context(investigation_id)
+    if not context:
+        return {"error": f"No context found for investigation {investigation_id}"}
+    return context

@@ -6,8 +6,6 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as bedrockagentcore from 'aws-cdk-lib/aws-bedrockagentcore';
-import * as ecr from 'aws-cdk-lib/aws-ecr';
-import * as codebuild from 'aws-cdk-lib/aws-codebuild';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import { Construct } from 'constructs';
 import * as fs from 'fs';
@@ -15,25 +13,33 @@ import * as path from 'path';
 
 export class AIOpsStack extends cdk.Stack {
   public readonly investigationsTable: dynamodb.Table;
+  public readonly investigationContextTable: dynamodb.Table;
+  public readonly logsTable: dynamodb.Table;
   public readonly agentPromptsTable: dynamodb.Table;
   public readonly investigationQueue: sqs.Queue;
   public readonly sqsTriggerFunction: lambda.Function;
   public readonly feishuNotifier: lambda.Function;
+  public readonly logsQuery: lambda.Function;
   public readonly agentRole: iam.Role;
   public readonly userPool: cognito.UserPool;
-  public readonly agentCoreGateway: bedrockagentcore.CfnGateway;
+  public readonly notificationGateway: bedrockagentcore.CfnGateway;
+  public readonly observabilityGateway: bedrockagentcore.CfnGateway;
   public readonly agentRuntime: bedrockagentcore.CfnRuntime;
 
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
     this.investigationsTable = this.createInvestigationsTable();
+    this.investigationContextTable = this.createInvestigationContextTable();
+    this.logsTable = this.createLogsTable();
     this.agentPromptsTable = this.createAgentPromptsTable();
     this.investigationQueue = this.createInvestigationQueue();
     this.feishuNotifier = this.createFeishuNotifier();
+    this.logsQuery = this.createLogsQuery();
     this.agentRole = this.createAgentRole();
     this.userPool = this.createUserPool();
-    this.agentCoreGateway = this.createAgentCoreGateway();
+    this.notificationGateway = this.createNotificationGateway();
+    this.observabilityGateway = this.createObservabilityGateway();
     this.agentRuntime = this.createAgentRuntime();
     this.sqsTriggerFunction = this.createSqsTriggerFunction();
     this.createConfigParameters();
@@ -46,7 +52,7 @@ export class AIOpsStack extends cdk.Stack {
       partitionKey: { name: 'investigation_id', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'item_type', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      pointInTimeRecovery: true,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
       removalPolicy: cdk.RemovalPolicy.DESTROY
     });
 
@@ -59,12 +65,32 @@ export class AIOpsStack extends cdk.Stack {
     return table;
   }
 
+  private createInvestigationContextTable(): dynamodb.Table {
+    return new dynamodb.Table(this, 'InvestigationContextTable', {
+      tableName: 'aiops-investigation-context',
+      partitionKey: { name: 'investigation_id', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      removalPolicy: cdk.RemovalPolicy.DESTROY
+    });
+  }
+
+  private createLogsTable(): dynamodb.Table {
+    return new dynamodb.Table(this, 'LogsTable', {
+      tableName: 'aiops-logs',
+      partitionKey: { name: 'component', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'time', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY
+    });
+  }
+
   private createAgentPromptsTable(): dynamodb.Table {
     return new dynamodb.Table(this, 'AgentPromptsTable', {
       partitionKey: { name: 'session_id', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'agent_name', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      pointInTimeRecovery: true,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
       removalPolicy: cdk.RemovalPolicy.DESTROY
     });
   }
@@ -76,6 +102,23 @@ export class AIOpsStack extends cdk.Stack {
       retentionPeriod: cdk.Duration.days(1),
       removalPolicy: cdk.RemovalPolicy.DESTROY
     });
+  }
+
+  private createLogsQuery(): lambda.Function {
+    const fn = new lambda.Function(this, 'LogsQuery', {
+      runtime: lambda.Runtime.PYTHON_3_11,
+      handler: 'logs_query.lambda_handler',
+      code: lambda.Code.fromAsset('lambda'),
+      timeout: cdk.Duration.seconds(120)
+    });
+
+    fn.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['logs:*'],
+      resources: ['*']
+    }));
+
+    return fn;
   }
 
   private createFeishuNotifier(): lambda.Function {
@@ -116,6 +159,8 @@ export class AIOpsStack extends cdk.Stack {
               resources: [
                 this.investigationsTable.tableArn,
                 `${this.investigationsTable.tableArn}/index/*`,
+                this.investigationContextTable.tableArn,
+                this.logsTable.tableArn,
                 this.agentPromptsTable.tableArn
               ]
             })
@@ -201,21 +246,13 @@ export class AIOpsStack extends cdk.Stack {
     });
   }
 
-  private createAgentCoreGateway(): bedrockagentcore.CfnGateway {
-    const gateway = new bedrockagentcore.CfnGateway(this, 'AIOpsGateway', {
-      name: 'aiops-notification-gateway',
+  private createNotificationGateway(): bedrockagentcore.CfnGateway {
+    const gateway = new bedrockagentcore.CfnGateway(this, 'NotificationGateway', {
+      name: 'aiops-notification',
       authorizerType: 'AWS_IAM',
       protocolType: 'MCP',
       roleArn: this.agentRole.roleArn,
-      exceptionLevel: 'DEBUG',
-
-      // authorizerConfiguration: {
-      //   customJwtAuthorizer: {
-      //     discoveryUrl: `https://cognito-idp.${this.region}.amazonaws.com/${this.userPool.userPoolId}/.well-known/openid-configuration`,
-      //     allowedAudience: [this.userPool.userPoolId],
-      //     allowedClients: [ "52vte516ehgb1inuvamt0pi9kv" ]
-      //   }
-      // }
+      exceptionLevel: 'DEBUG'
     });
 
     new bedrockagentcore.CfnGatewayTarget(this, 'FeishuTarget', {
@@ -252,6 +289,61 @@ export class AIOpsStack extends cdk.Stack {
     return gateway;
   }
 
+  private createObservabilityGateway(): bedrockagentcore.CfnGateway {
+    const gateway = new bedrockagentcore.CfnGateway(this, 'ObservabilityGateway', {
+      name: 'aiops-observability',
+      authorizerType: 'AWS_IAM',
+      protocolType: 'MCP',
+      roleArn: this.agentRole.roleArn,
+      exceptionLevel: 'DEBUG'
+    });
+
+    new bedrockagentcore.CfnGatewayTarget(this, 'LogsQueryTarget', {
+      gatewayIdentifier: gateway.attrGatewayIdentifier,
+      name: 'logs-query',
+      targetConfiguration: {
+        mcp: {
+          lambda: {
+            lambdaArn: this.logsQuery.functionArn,
+            toolSchema: {
+              inlinePayload: [{
+                name: 'query_logs',
+                description: 'Query CloudWatch Logs',
+                inputSchema: {
+                  type: 'object',
+                  properties: {
+                    log_group_name: {
+                      type: 'string',
+                      description: 'CloudWatch log group name'
+                    },
+                    query_string: {
+                      type: 'string',
+                      description: 'CloudWatch Insights query string'
+                    },
+                    start_time: {
+                      type: 'string',
+                      description: 'Start time in epoch seconds'
+                    },
+                    end_time: {
+                      type: 'string',
+                      description: 'End time in epoch seconds'
+                    }
+                  },
+                  required: ['log_group_name', 'start_time', 'end_time']
+                }
+              }]
+            }
+          }
+        }
+      },
+      credentialProviderConfigurations: [{
+        credentialProviderType: 'GATEWAY_IAM_ROLE'
+      }]
+    });
+
+    return gateway;
+  }
+
   private createAgentRuntime(): bedrockagentcore.CfnRuntime {
     const imageUri = new cdk.CfnParameter(this, 'ImageUri', {
       type: 'String',
@@ -263,13 +355,17 @@ export class AIOpsStack extends cdk.Stack {
       roleArn: this.agentRole.roleArn,
       agentRuntimeArtifact: {
         containerConfiguration: {
-          containerUri: imageUri.valueAsString
+          containerUri: imageUri.valueAsString,
         }
       },
       environmentVariables: {
         INVESTIGATION_QUEUE_URL: this.investigationQueue.queueUrl,
         INVESTIGATIONS_TABLE: this.investigationsTable.tableName,
-        NOTIFICATION_GATEWAY_URL: this.agentCoreGateway.attrGatewayUrl,
+        CONTEXT_TABLE: this.investigationContextTable.tableName,
+        LOGS_TABLE: this.logsTable.tableName,
+        ONLINE_LOG: 'true',
+        NOTIFICATION_GATEWAY_URL: this.notificationGateway.attrGatewayUrl,
+        OBSERVABILITY_GATEWAY_URL: this.observabilityGateway.attrGatewayUrl,
         AWS_REGION: this.region,
         AWS_DEFAULT_REGION: this.region
       },
@@ -332,19 +428,16 @@ export class AIOpsStack extends cdk.Stack {
       description: 'SQS queue URL for investigation triggers'
     });
 
-    new cdk.CfnOutput(this, 'UserPoolId', {
-      value: this.userPool.userPoolId,
-      description: 'Cognito User Pool ID for authentication'
+    new cdk.CfnOutput(this, 'NotificationGatewayUrl', {
+      value: this.notificationGateway.attrGatewayUrl,
+      description: 'Notification Gateway URL',
+      exportName: 'NotificationGatewayUrl'
     });
 
-    new cdk.CfnOutput(this, 'FeishuNotifierArn', {
-      value: this.feishuNotifier.functionArn,
-      description: 'Feishu notifier Lambda function ARN'
-    });
-
-    new cdk.CfnOutput(this, 'AgentCoreGatewayArn', {
-      value: this.agentCoreGateway.attrGatewayArn,
-      description: 'AgentCore Gateway ARN for AIOps notifications'
+    new cdk.CfnOutput(this, 'ObservabilityGatewayUrl', {
+      value: this.observabilityGateway.attrGatewayUrl,
+      description: 'Observability Gateway URL',
+      exportName: 'ObservabilityGatewayUrl'
     });
 
     new cdk.CfnOutput(this, 'AgentRuntimeArn', {
