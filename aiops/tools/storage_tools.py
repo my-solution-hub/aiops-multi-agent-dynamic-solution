@@ -3,6 +3,7 @@
 import boto3
 import json
 import os
+from datetime import datetime
 from strands.tools import tool
 from aiops.utils.dynamodb_helper import InvestigationStore
 from aiops.utils.context_store import InvestigationContextStore
@@ -14,6 +15,27 @@ context_store = InvestigationContextStore()
 sqs = boto3.client('sqs')
 
 @tool
+def update_confidence(
+    investigation_id: str,
+    confidence: float,
+    hypothesis: str,
+    root_cause_candidates: List[str]
+) -> str:
+    """Update investigation confidence and hypothesis.
+    
+    Args:
+        investigation_id: Investigation ID
+        confidence: Confidence score (0.0-1.0)
+        hypothesis: Current hypothesis about root cause
+        root_cause_candidates: List of potential root causes
+        
+    Returns:
+        Success message
+    """
+    context_store.update_hypothesis(investigation_id, hypothesis, confidence, root_cause_candidates)
+    return f"Updated confidence to {confidence:.2f}"
+
+@tool
 def save_investigation_workflow(
     investigation_id: str,
     alarm_summary: Dict,
@@ -23,12 +45,19 @@ def save_investigation_workflow(
     
     Args:
         investigation_id: Unique investigation ID
-        alarm_summary: Alarm summary with name, metric, namespace, resource_id
+        alarm_summary: Alarm summary with resource_name, metric, namespace, resource_id, time
         tasks: List of tasks with task_id, agent_type, description, priority
         
     Returns:
         Success message
     """
+    # Ensure required fields exist with defaults
+    alarm_summary.setdefault('resource_name', 'unknown')
+    alarm_summary.setdefault('metric', 'unknown')
+    alarm_summary.setdefault('namespace', 'unknown')
+    alarm_summary.setdefault('resource_id', 'unknown')
+    alarm_summary.setdefault('time', str(int(datetime.utcnow().timestamp())))
+    
     store.save_workflow(investigation_id, alarm_summary, tasks)
     return f"Workflow saved for investigation {investigation_id} with {len(tasks)} tasks"
 
@@ -54,6 +83,69 @@ def trigger_investigation(investigation_id: str) -> str:
         })
     )
     return f"Investigation {investigation_id} triggered for execution"
+
+@tool
+def store_task_findings(
+    investigation_id: str,
+    task_id: str,
+    summary: str,
+    key_findings: List[str],
+    evidence: List[str] = None,
+    recommendations: List[str] = None
+) -> str:
+    """Store structured findings from task execution.
+    
+    Args:
+        investigation_id: Investigation ID
+        task_id: Task ID
+        summary: Brief summary of findings
+        key_findings: List of key findings or observations
+        evidence: Optional list of supporting evidence
+        recommendations: Optional list of recommendations
+        
+    Returns:
+        Success message
+    """
+    finding_data = {
+        "summary": summary,
+        "key_findings": key_findings,
+        "evidence": evidence or [],
+        "recommendations": recommendations or [],
+        "timestamp": datetime.utcnow().isoformat()
+    }
+    
+    # Get agent type from task
+    workflow = store.get_workflow(investigation_id)
+    task = next((t for t in workflow.get('tasks', []) if t.get('task_id') == task_id), None)
+    agent_type = task.get('agent_type', 'Unknown') if task else 'Unknown'
+    
+    context_store.update_finding(investigation_id, task_id, agent_type, finding_data)
+    return f"Findings stored for task {task_id}"
+
+@tool
+def get_investigation_summary(investigation_id: str) -> Dict:
+    """Get investigation summary including hypothesis, findings, and confidence.
+    
+    Args:
+        investigation_id: Investigation ID
+        
+    Returns:
+        Dict with investigation summary
+    """
+    context = context_store.get_context(investigation_id)
+    if not context:
+        return {"error": f"No context found for investigation {investigation_id}"}
+    
+    workflow = store.get_workflow(investigation_id)
+    
+    return {
+        "alarm_summary": workflow.get('alarm_summary', {}),
+        "current_hypothesis": context.get('current_hypothesis', ''),
+        "confidence": context.get('confidence', 0.0),
+        "root_cause_candidates": context.get('root_cause_candidates', []),
+        "findings": context.get('findings', {}),
+        "status": context.get('status', 'UNKNOWN')
+    }
 
 @tool
 def get_alarm_summary(investigation_id: str) -> Dict:

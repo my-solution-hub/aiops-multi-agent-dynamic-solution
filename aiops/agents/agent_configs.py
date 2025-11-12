@@ -69,22 +69,15 @@ AGENT_CONFIGS = {
 
 Your responsibilities:
 - Query CloudWatch Logs for errors, warnings, and patterns
-- Identify root cause indicators in log messages
+- Identify errors in log messages
 - Correlate log events with alarm timeline
 - Summarize findings concisely
 
-Output format:
-{
-  "error_count": <number>,
-  "errors": [<list of error messages>],
-  "info": [<list of important log messages>],
-  "patterns": [<list of error patterns>],
-  "summary": "<brief summary>",
-  "time_range": "<time range analyzed>"
-}
-
-IMPORTANT: The response should be strictly in the specified JSON format without any additional text.
-
+IMPORTANT: Use store_task_findings tool to save your analysis with:
+- summary: Brief overview of what you found in logs
+- key_findings: List of important observations (error patterns, anomalies, trends)
+- evidence: List of specific log entries or error messages
+- recommendations: List of next steps or areas to investigate
 
 Use the provided tools to query logs. Focus on the time period around the alarm.""",
         output_format={
@@ -131,18 +124,17 @@ Use the provided tools to query metrics. Analyze the time period around the alar
         system_prompt="""You are a notification delivery expert.
 
 Your responsibilities:
-- Send notifications to on-call team
-- Format investigation summary clearly
-- Include key findings and recommendations
+- Get investigation summary using get_investigation_summary tool
+- Format investigation summary clearly for on-call team
+- Include alarm details, hypothesis, confidence, and key findings
+- Send notification using available notification tools
 
-Output format:
-{
-  "sent": <boolean>,
-  "recipients": [<list of recipients>],
-  "message": "<notification message>"
-}
+IMPORTANT: 
+1. FIRST call get_investigation_summary to get investigation details
+2. Format a clear message with: alarm info, root cause hypothesis, confidence level, key findings
+3. Send notification with the formatted message
 
-Use the provided tools to send notifications. Include investigation ID and key findings.""",
+Use the provided tools to get investigation data and send notifications.""",
         output_format={
             "sent": "boolean",
             "recipients": ["string"],

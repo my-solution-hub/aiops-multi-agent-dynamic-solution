@@ -8,7 +8,7 @@ from datetime import datetime
 from botocore.config import Config
 from strands import Agent
 from strands.models import BedrockModel
-from aiops.tools.storage_tools import get_alarm_summary
+from aiops.tools.storage_tools import get_alarm_summary, store_task_findings, get_investigation_summary
 from aiops.utils.dynamodb_helper import InvestigationStore
 from aiops.utils.context_store import InvestigationContextStore
 from aiops.utils.online_logger import log
@@ -57,24 +57,18 @@ class ExecutorAgent:
             # Execute task with tools and context
             result = self.execute_task(task, investigation_id)
             
-            # Process result using agent config
+            log("executor-execute", f"Task {task['task_id']} executed", investigation_id=investigation_id)
+            
+            # Findings are already stored via store_task_findings tool
+            # Just add timeline event
             agent_type = task['agent_type']
-            processed_result = process_agent_result(agent_type, result)
-            log("executor-execute", processed_result, investigation_id=investigation_id)
-            # Update context with findings
             task_id = task['task_id']
-            finding_data = {
-                "result": processed_result.get("message", processed_result) if isinstance(processed_result, dict) else str(processed_result),
-                "status": result.get("status", "completed"),
-                **processed_result
-            }
-            self.context_store.update_finding(investigation_id, task_id, agent_type, finding_data)
             self.context_store.add_timeline_event(
                 investigation_id,
                 f"Task {task_id} completed by {agent_type}",
                 agent_type
             )
-            print(f"✅ Context updated for {task_id}")
+            print(f"✅ Task {task_id} completed")
             
             # Mark complete in DynamoDB
             self.store.complete_task(investigation_id, task['task_id'], result)
@@ -155,7 +149,7 @@ class ExecutorAgent:
             # Keep MCP client session open during execution
             with mcp_client:
                 # Load tools within context
-                tools = [get_alarm_summary]
+                tools = [get_alarm_summary, store_task_findings, get_investigation_summary]
                 pagination_token = None
                 while True:
                     result = mcp_client.list_tools_sync(pagination_token=pagination_token)
@@ -180,10 +174,20 @@ class ExecutorAgent:
                 response = agent(context)
                 print(f"✅ Agent execution completed")
                 
-                # Extract JSON from response
-                message = response.message if hasattr(response, 'message') else str(response)
+                # Extract message from response
+                if hasattr(response, 'message'):
+                    message = response.message
+                else:
+                    message = str(response)
                 
-                # Try to extract JSON from message
+                # If message is already a dict, return it directly
+                if isinstance(message, dict):
+                    return {
+                        "status": "completed",
+                        **message
+                    }
+                
+                # Try to extract JSON from string message
                 import re
                 json_match = re.search(r'\{.*\}', message, re.DOTALL)
                 if json_match:

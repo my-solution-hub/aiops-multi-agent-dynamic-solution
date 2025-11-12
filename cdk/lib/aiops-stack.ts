@@ -366,6 +366,7 @@ export class AIOpsStack extends cdk.Stack {
         ONLINE_LOG: 'true',
         NOTIFICATION_GATEWAY_URL: this.notificationGateway.attrGatewayUrl,
         OBSERVABILITY_GATEWAY_URL: this.observabilityGateway.attrGatewayUrl,
+        MAX_TASKS_PER_INVESTIGATION: process.env.MAX_TASKS_PER_INVESTIGATION || '5',
         AWS_REGION: this.region,
         AWS_DEFAULT_REGION: this.region
       },

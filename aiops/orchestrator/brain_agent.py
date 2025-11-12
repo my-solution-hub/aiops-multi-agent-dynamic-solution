@@ -3,7 +3,7 @@
 from strands import Agent
 from strands.models import BedrockModel
 from aiops.tools.gateway_config import AGENT_GATEWAY_CONFIG, get_agent_description
-from aiops.tools.storage_tools import save_investigation_workflow, trigger_investigation
+from aiops.tools.storage_tools import save_investigation_workflow, trigger_investigation, update_confidence
 from aiops.utils.context_store import InvestigationContextStore
 from aiops.utils.online_logger import log
 from typing import Dict
@@ -11,6 +11,9 @@ import json
 import uuid
 import boto3
 import os
+
+# Configuration
+MAX_TASKS_PER_INVESTIGATION = int(os.getenv('MAX_TASKS_PER_INVESTIGATION', '5'))
 
 class BrainAgent:
     """Brain Agent processes alarms and generates investigation workflows."""
@@ -26,7 +29,7 @@ class BrainAgent:
         )
         self.evaluator_agent = Agent(
             model=self.model,
-            tools=[save_investigation_workflow, trigger_investigation],
+            tools=[update_confidence, save_investigation_workflow, trigger_investigation],
             system_prompt=self._get_evaluator_prompt()
         )
     
@@ -102,18 +105,25 @@ Your responsibilities:
 Available specialized agents:
 {agents_list}
 
-Evaluation criteria:
-- Confidence >= 0.8: Investigation can conclude
-- Confidence < 0.8: Continue investigation or add tasks
-- Consider: evidence quality, consistency, completeness
+CRITICAL: Evaluation workflow:
+1. FIRST: Call update_confidence with your assessment
+2. THEN: Check if confidence >= 0.7
+   - If YES: STOP and provide summary (do NOT call other tools)
+   - If NO: Add tasks with save_investigation_workflow and trigger_investigation
 
-If continuing investigation:
+Confidence criteria:
+- 0.9-1.0: Definitive root cause identified with strong evidence
+- 0.7-0.9: Clear root cause with supporting evidence
+- 0.5-0.7: Hypothesis formed but needs validation
+- 0.0-0.5: Insufficient evidence, continue investigation
+
+If confidence >= 0.7 (concluding):
+- Provide summary of findings and root cause
+- Do NOT call save_investigation_workflow or trigger_investigation
+
+If confidence < 0.7 (continuing):
 - Use save_investigation_workflow to add new tasks
-- Use trigger_investigation to resume execution
-
-If concluding:
-- Do NOT call any tools
-- Provide summary of findings and root cause"""
+- Use trigger_investigation to resume execution"""
     
     def process_alarm_text(self, alarm_text: str, investigation_id: str = None) -> str:
         """Process alarm text and generate investigation workflow.
@@ -178,13 +188,25 @@ Generate tasks and save the workflow using save_investigation_workflow tool."""
         store = InvestigationStore()
         workflow = store.get_workflow(investigation_id)
         
+        total_tasks = len(workflow.get('tasks', []))
         completed = len([t for t in workflow.get('tasks', []) if t.get('status') == 'COMPLETED'])
         pending = len([t for t in workflow.get('tasks', []) if t.get('status') == 'PENDING'])
-        log("brain-evaluate", f"Completed: {completed}, Pending: {pending}, Confidence: {context.get('confidence', 0)}", investigation_id=investigation_id)
+        
+        log("brain-evaluate", f"Total: {total_tasks}/{MAX_TASKS_PER_INVESTIGATION}, Completed: {completed}, Pending: {pending}, Confidence: {context.get('confidence', 0)}", investigation_id=investigation_id)
+
+        # Force conclusion if max tasks reached
+        if total_tasks >= MAX_TASKS_PER_INVESTIGATION:
+            log("brain-evaluate", f"Max tasks ({MAX_TASKS_PER_INVESTIGATION}) reached, forcing conclusion", investigation_id=investigation_id)
+            self.context_store.update_status(investigation_id, "COMPLETED")
+            return f"Investigation concluded: Max tasks limit reached"
 
         prompt = f"""Re-evaluate investigation workflow based on findings.
 
 Investigation ID: {investigation_id}
+
+CRITICAL CONSTRAINT: Total tasks created: {total_tasks}/{MAX_TASKS_PER_INVESTIGATION}
+- If total tasks >= {MAX_TASKS_PER_INVESTIGATION}: MUST conclude immediately
+- Remaining task budget: {MAX_TASKS_PER_INVESTIGATION - total_tasks}
 
 Current Context:
 - Status: {context.get('status')}
