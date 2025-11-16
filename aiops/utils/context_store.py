@@ -156,6 +156,36 @@ class InvestigationContextStore:
             }
         )
     
+    def store_final_result(self, investigation_id: str, root_cause: str, findings: List[str], confidence: str, summary: str) -> None:
+        """Store final investigation result from RootCauseAnalysisAgent.
+        
+        Args:
+            investigation_id: Investigation ID
+            root_cause: Root cause statement
+            findings: List of top findings
+            confidence: Confidence assessment (High|Medium|Low with explanation)
+            summary: Investigation summary
+        """
+        timestamp = datetime.utcnow().isoformat()
+        
+        result = {
+            "root_cause": root_cause,
+            "findings": findings,
+            "confidence": confidence,
+            "summary": summary,
+            "timestamp": timestamp
+        }
+        
+        self.table.update_item(
+            Key={'investigation_id': investigation_id},
+            UpdateExpression='SET final_result = :result, updated_at = :time, version = version + :inc',
+            ExpressionAttributeValues=convert_floats({
+                ':result': result,
+                ':time': timestamp,
+                ':inc': 1
+            })
+        )
+    
     def get_context(self, investigation_id: str) -> Optional[Dict]:
         """Get full investigation context.
         

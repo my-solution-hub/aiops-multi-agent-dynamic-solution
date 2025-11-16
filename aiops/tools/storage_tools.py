@@ -258,3 +258,26 @@ def get_investigation_context(investigation_id: str) -> Dict:
     if not context:
         return {"error": f"No context found for investigation {investigation_id}"}
     return context
+
+@tool
+def store_final_result(
+    investigation_id: str,
+    root_cause: str,
+    findings: List[str],
+    confidence: str,
+    summary: str
+) -> str:
+    """Store final investigation result from RootCauseAnalysisAgent.
+    
+    Args:
+        investigation_id: Investigation ID
+        root_cause: Root cause statement
+        findings: List of top findings
+        confidence: Confidence assessment (High|Medium|Low with explanation)
+        summary: Investigation summary
+        
+    Returns:
+        Success message
+    """
+    context_store.store_final_result(investigation_id, root_cause, findings, confidence, summary)
+    return f"Final result stored for investigation {investigation_id}"

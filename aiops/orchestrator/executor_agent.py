@@ -45,9 +45,10 @@ class ExecutorAgent:
             task = self.store.get_next_task(investigation_id)
             
             if not task:
-                log("executor-start", "No pending tasks found", investigation_id=investigation_id)
-                print("❌ No pending tasks found")
-                return {"status": "no_tasks", "investigation_id": investigation_id}
+                log("executor-complete", "No pending tasks - completing investigation", investigation_id=investigation_id)
+                self.context_store.update_status(investigation_id, "COMPLETED")
+                print("✅ Investigation completed - no pending tasks")
+                return {"status": "completed", "investigation_id": investigation_id}
             
             log("executor-execute", f"Executing task {task['task_id']} with {task['agent_type']}", investigation_id=investigation_id)
             print(f"📋 Executing task: {task['task_id']}")

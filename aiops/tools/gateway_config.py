@@ -19,14 +19,14 @@ AGENT_GATEWAY_CONFIG: Dict[str, Dict[str, any]] = {
         "gateways": ["observability-gateway"],
         "description": "Queries CloudWatch Logs for errors, warnings, and patterns"
     },
+    "TraceGraphAgent": {
+        "gateways": ["observability-gateway"],
+        "description": "Analyzes X-Ray service graph for distributed system topology and dependencies. It can also helps to find real service name/ID from alarms"
+    },
 
     # "MetricsAgent": {
     #     "gateways": ["observability-gateway"],
     #     "description": "Queries CloudWatch Metrics for performance data and trends"
-    # },
-    # "TracesAgent": {
-    #     "gateways": ["observability-gateway"],
-    #     "description": "Analyzes X-Ray traces for distributed system issues"
     # },
     # "ResourceAgent": {
     #     "gateways": ["resources-gateway"],

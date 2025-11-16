@@ -46,10 +46,11 @@ class BrainAgent:
 
 Your responsibilities:
 1. Extract alarm information from input text
-2. Categorize the alarm type and identify affected resources
-3. Generate investigation tasks for specialized agents
-4. Save the workflow using save_investigation_workflow tool
-5. Trigger execution using trigger_investigation tool
+2. Understand resources involved from Trace Graph analysis
+3. Categorize the alarm type and identify affected resources
+4. Generate investigation tasks for specialized agents
+5. Save the workflow using save_investigation_workflow tool
+6. Trigger execution using trigger_investigation tool
 
 Available specialized agents:
 {agents_list}

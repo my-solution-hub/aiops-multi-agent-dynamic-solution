@@ -3,7 +3,6 @@
 from typing import Dict, Callable, Any
 from datetime import datetime
 
-
 class AgentConfig:
     """Configuration for a specialized agent."""
     
@@ -29,6 +28,15 @@ def process_logs_result(result: Dict) -> Dict:
         "key_patterns": result.get("patterns", []),
         "log_summary": result.get("summary", ""),
         "time_range": result.get("time_range", "")
+    }
+
+
+def process_trace_graph_result(result: Dict) -> Dict:
+    """Process TraceGraphAgent result for context storage."""
+    return {
+        "relevant_services": result.get("relevant_services", []),
+        "issues": result.get("issues", []),
+        "graph_summary": result.get("graph_summary", "")
     }
 
 
@@ -89,6 +97,35 @@ Use the provided tools to query logs. Focus on the time period around the alarm.
             "time_range": "string"
         },
         process_result=process_logs_result
+    ),
+    
+    "TraceGraphAgent": AgentConfig(
+        agent_type="TraceGraphAgent",
+        system_prompt="""You are an X-Ray service graph analysis expert.
+
+Your responsibilities:
+- Query X-Ray service graph for distributed system topology
+- Identify relevant services in the trace graph
+- Detect issues in service dependencies and communication
+- Analyze service health and performance patterns
+
+IMPORTANT: Use store_task_findings tool to save your analysis with:
+- summary: Brief overview of service graph findings
+- key_findings: List of important observations (service issues, dependency problems, patterns)
+- evidence: List of specific services, edges, or metrics from the graph
+- recommendations: List of services or dependencies to investigate further
+
+For relevant_services, provide:
+- resource_type: AWS service type (e.g., "Lambda", "EC2", "S3", "DynamoDB", "API Gateway")
+- resource_id: AWS ARN or identifier (e.g., "arn:aws:lambda:region:account:function:name" or instance ID)
+
+Use query_trace_graph tool to analyze the service graph. Focus on the time period around the alarm.""",
+        output_format={
+            "relevant_services": [{"resource_type": "string (e.g., Lambda, EC2, S3)", "resource_id": "string (AWS ARN or ID)"}],
+            "issues": ["string"],
+            "graph_summary": "string"
+        },
+        process_result=process_trace_graph_result
     ),
     
     "MetricsAgent": AgentConfig(
@@ -152,6 +189,12 @@ Your responsibilities:
 - Determine the most likely root cause
 - Provide confidence assessment in string format
 - Summarize key evidence supporting the conclusion
+- Store the final result using store_final_result tool
+
+IMPORTANT:
+1. Use get_investigation_summary to get all findings
+2. Analyze and determine root cause
+3. Call store_final_result with your analysis
 
 Output format:
 {

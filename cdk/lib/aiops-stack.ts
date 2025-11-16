@@ -20,6 +20,7 @@ export class AIOpsStack extends cdk.Stack {
   public readonly sqsTriggerFunction: lambda.Function;
   public readonly feishuNotifier: lambda.Function;
   public readonly logsQuery: lambda.Function;
+  public readonly xrayGraphQuery: lambda.Function;
   public readonly agentRole: iam.Role;
   public readonly userPool: cognito.UserPool;
   public readonly notificationGateway: bedrockagentcore.CfnGateway;
@@ -36,6 +37,7 @@ export class AIOpsStack extends cdk.Stack {
     this.investigationQueue = this.createInvestigationQueue();
     this.feishuNotifier = this.createFeishuNotifier();
     this.logsQuery = this.createLogsQuery();
+    this.xrayGraphQuery = this.createXrayGraphQuery();
     this.agentRole = this.createAgentRole();
     this.userPool = this.createUserPool();
     this.notificationGateway = this.createNotificationGateway();
@@ -115,6 +117,27 @@ export class AIOpsStack extends cdk.Stack {
     fn.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: ['logs:*'],
+      resources: ['*']
+    }));
+
+    return fn;
+  }
+
+  private createXrayGraphQuery(): lambda.Function {
+    const fn = new lambda.Function(this, 'XrayGraphQuery', {
+      runtime: lambda.Runtime.PYTHON_3_11,
+      handler: 'xray_graph_query.handler',
+      code: lambda.Code.fromAsset('lambda'),
+      timeout: cdk.Duration.seconds(120)
+    });
+
+    fn.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'xray:GetTraceSummaries',
+        'xray:BatchGetTraces',
+        'xray:GetServiceGraph'
+      ],
       resources: ['*']
     }));
 
@@ -330,6 +353,40 @@ export class AIOpsStack extends cdk.Stack {
                     }
                   },
                   required: ['log_group_name', 'start_time', 'end_time']
+                }
+              }]
+            }
+          }
+        }
+      },
+      credentialProviderConfigurations: [{
+        credentialProviderType: 'GATEWAY_IAM_ROLE'
+      }]
+    });
+
+    new bedrockagentcore.CfnGatewayTarget(this, 'XrayGraphQueryTarget', {
+      gatewayIdentifier: gateway.attrGatewayIdentifier,
+      name: 'xray-graph-query',
+      targetConfiguration: {
+        mcp: {
+          lambda: {
+            lambdaArn: this.xrayGraphQuery.functionArn,
+            toolSchema: {
+              inlinePayload: [{
+                name: 'query_trace_graph',
+                description: 'Query X-Ray service graph for distributed system topology and service dependencies',
+                inputSchema: {
+                  type: 'object',
+                  properties: {
+                    start_time: {
+                      type: 'string',
+                      description: 'Start time in ISO format (e.g., "2024-01-01T00:00:00Z")'
+                    },
+                    end_time: {
+                      type: 'string',
+                      description: 'End time in ISO format (e.g., "2024-01-01T01:00:00Z")'
+                    }
+                  }
                 }
               }]
             }
